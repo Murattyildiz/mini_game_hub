@@ -61,10 +61,19 @@ class SudokuPage extends ConsumerWidget {
       }
     }
 
+    final mins = state.elapsedSeconds ~/ 60;
+    final secs = state.elapsedSeconds % 60;
+    final timeStr = '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sudoku'),
+        title: Text('Sudoku • $timeStr • ${state.moves} hamle'),
         actions: [
+          IconButton(
+            tooltip: 'Doğruluk Modu',
+            onPressed: ref.read(sudokuProvider.notifier).toggleStrictValidation,
+            icon: Icon(state.strictValidation ? Icons.rule : Icons.rule_outlined),
+          ),
           IconButton(
             tooltip: 'Geri Al',
             onPressed: ref.read(sudokuProvider.notifier).undo,
@@ -133,6 +142,8 @@ class SudokuPage extends ConsumerWidget {
             }
             // escape to clear selection
             if (k == LogicalKeyboardKey.escape) { n.clearSelected(); return KeyEventResult.handled; }
+            // strict validation toggle (V)
+            if (k == LogicalKeyboardKey.keyV) { n.toggleStrictValidation(); return KeyEventResult.handled; }
             return KeyEventResult.ignored;
           },
           child: Column(
