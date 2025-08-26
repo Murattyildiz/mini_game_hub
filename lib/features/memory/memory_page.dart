@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:go_router/go_router.dart';
+import 'data/memory_stats_repo.dart';
 
 class MemoryGamePage extends StatefulWidget {
   const MemoryGamePage({super.key});
@@ -32,6 +34,11 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
   Timer? _timer;
   int _elapsed = 0;
   bool _paused = false;
+  // Challenge mode
+  bool _challenge = false;
+  int _countdown = 0; // seconds remaining when challenge is on
+  // Stats repo
+  MemoryStatsRepo? _stats;
   // Best scores (per difficulty)
   final Map<_Difficulty, int?> _bestTime = {
     _Difficulty.easy: null,
@@ -61,6 +68,8 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
     _startNewGame(_difficulty);
     // Load persisted best scores
     unawaited(_loadBest());
+    // Prepare stats repo
+    unawaited(_initStats());
   }
 
   @override
@@ -100,8 +109,15 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
       _matchedPairs = 0;
       _elapsed = 0;
       _paused = false;
+      _resetChallengeCountdown();
     });
     _restartTimer();
+  }
+
+  Future<void> _initStats() async {
+    final repo = await MemoryStatsRepo.create();
+    if (!mounted) return;
+    setState(() => _stats = repo);
   }
 
   Future<void> _loadBest() async {
@@ -143,7 +159,21 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted || _paused) return;
-      setState(() => _elapsed += 1);
+      setState(() {
+        _elapsed += 1;
+        if (_challenge && _countdown > 0) {
+          _countdown -= 1;
+          if (_countdown == 0) {
+            // time over => stop game interaction
+            _paused = true;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Süre bitti! Challenge başarısız.')),
+            );
+            // Record fail
+            _submitStats(success: false, bonus: 0);
+          }
+        }
+      });
     });
   }
 
@@ -184,6 +214,9 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
             );
           }
           unawaited(_updateBestIfNeeded());
+          // Submit stats
+          final bonus = _challenge ? (_countdown.clamp(0, 1 << 30)) : 0;
+          unawaited(_submitStats(success: true, bonus: bonus));
         }
       }
       setState(() {
@@ -200,6 +233,42 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
     return '${m.toString().padLeft(2, '0')}:${ss.toString().padLeft(2, '0')}';
   }
 
+  void _resetChallengeCountdown() {
+    if (!_challenge) {
+      _countdown = 0;
+      return;
+    }
+    switch (_difficulty) {
+      case _Difficulty.easy:
+        _countdown = 90;
+        break;
+      case _Difficulty.medium:
+        _countdown = 150;
+        break;
+      case _Difficulty.hard:
+        _countdown = 240;
+        break;
+    }
+  }
+
+  Future<void> _submitStats({required bool success, required int bonus}) async {
+    final repo = _stats;
+    if (repo == null) return;
+    final mapDiff = switch (_difficulty) {
+      _Difficulty.easy => MemoryDifficulty.easy,
+      _Difficulty.medium => MemoryDifficulty.medium,
+      _Difficulty.hard => MemoryDifficulty.hard,
+    };
+    await repo.recordGameResult(MemoryGameResult(
+      difficulty: mapDiff,
+      timeSeconds: _elapsed,
+      moves: _moves,
+      success: success,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      bonus: bonus,
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final time = _fmtTime(_elapsed);
@@ -212,7 +281,7 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
       data: themed,
       child: Scaffold(
       appBar: AppBar(
-        title: Text('Kart Eşleştirme • $time • $_moves hamle'),
+        title: Text('Kart Eşleştirme • $time • $_moves hamle${_challenge ? ' • ⏳ ${_fmtTime(_countdown)}' : ''}'),
         actions: [
           PopupMenuButton<_Difficulty>(
             tooltip: 'Zorluk',
@@ -225,6 +294,11 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
             icon: const Icon(Icons.grid_view),
           ),
           IconButton(
+            tooltip: 'İstatistikler',
+            onPressed: () => context.push('/memory_stats'),
+            icon: const Icon(Icons.leaderboard_outlined),
+          ),
+          IconButton(
             tooltip: 'Tema',
             onPressed: () => setState(() => _seedIndex = (_seedIndex + 1) % _seeds.length),
             icon: const Icon(Icons.palette_outlined),
@@ -233,6 +307,16 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
             tooltip: _dark ? 'Açık Tema' : 'Koyu Tema',
             onPressed: () => setState(() => _dark = !_dark),
             icon: Icon(_dark ? Icons.light_mode : Icons.dark_mode),
+          ),
+          IconButton(
+            tooltip: _challenge ? 'Challenge: Açık' : 'Challenge: Kapalı',
+            onPressed: () {
+              setState(() {
+                _challenge = !_challenge;
+                _resetChallengeCountdown();
+              });
+            },
+            icon: Icon(_challenge ? Icons.timer : Icons.timer_off),
           ),
           IconButton(
             tooltip: _paused ? 'Devam' : 'Duraklat',
@@ -289,10 +373,14 @@ class _MemoryGamePageState extends State<MemoryGamePage> {
                             size: cellSize,
                             faceUp: faceUp,
                             matched: card.matched,
-                            frontChild: Container(
-                              color: Theme.of(context).colorScheme.primaryContainer,
-                              alignment: Alignment.center,
-                              child: Text(card.content, style: TextStyle(fontSize: fontSize)),
+                            frontChild: AnimatedScale(
+                              duration: const Duration(milliseconds: 180),
+                              scale: card.matched ? 1.06 : 1.0,
+                              child: Container(
+                                color: Theme.of(context).colorScheme.primaryContainer,
+                                alignment: Alignment.center,
+                                child: Text(card.content, style: TextStyle(fontSize: fontSize)),
+                              ),
                             ),
                             backChild: Container(
                               color: Theme.of(context).colorScheme.surfaceVariant,

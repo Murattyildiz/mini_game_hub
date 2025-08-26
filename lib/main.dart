@@ -1,12 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'features/home/home_page.dart';
 import 'features/sudoku/sudoku_page.dart';
 import 'features/memory/memory_page.dart';
+import 'features/memory/memory_stats_page.dart';
 import 'features/sos/sos_page.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    // Initialize Firebase if configured. We ignore failures to keep app offline-capable.
+    await Firebase.initializeApp();
+  } catch (_) {}
   runApp(const ProviderScope(child: MyApp()));
 }
 
@@ -29,6 +36,10 @@ class MyApp extends ConsumerWidget {
         GoRoute(
           path: '/memory',
           builder: (context, state) => const MemoryGamePage(),
+        ),
+        GoRoute(
+          path: '/memory_stats',
+          builder: (context, state) => const MemoryStatsPage(),
         ),
         GoRoute(
           path: '/sos',
